@@ -1,77 +1,27 @@
-version: '3.8'
-
 services:
-  # Continuum CDN Application
   continuum:
     build: .
     ports:
-      - "5000:5000"      # HTTP
-      - "443:443"        # HTTPS
-      - "9090:9090"      # Prometheus metrics
+      - "5000:5000"
+    env_file:
+      - .env.production
     environment:
-      # Server
-      - PORT=5000
-      - HTTPS_ENABLED=false
-      - HTTPS_PORT=443
-      - ENABLE_HTTP2=false
-      
-      # Redis
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDIS_ENABLED=true
-      
-      # Cluster
-      - CLUSTER_ENABLED=true
-      - MAX_WORKERS=4
-      
-      # Monitoring
-      - PROMETHEUS_ENABLED=true
-      - PROMETHEUS_PORT=9090
-      - LOG_LEVEL=info
-      - LOG_FORMAT=json
-      
-      # Security
-      - SESSION_SECRET=${SESSION_SECRET:-change-this-in-production}
-      - ADMIN_WHITELIST_IPS=${ADMIN_WHITELIST_IPS:-}
-      
-      # SMTP (Optional)
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASS=${SMTP_PASS:-}
-      - SMTP_FROM=${SMTP_FROM:-noreply@continuum-cdn.com}
-      
-      # Google OAuth
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:5000/auth/google/callback}
-      
-      # ACME/SSL
-      - ACME_DIRECTORY=staging
-      - ACME_EMAIL=${ACME_EMAIL:-admin@continuum-cdn.com}
-      
-      # Performance
-      - CACHE_MAX_SIZE_MB=10240
-      - RATE_LIMIT_MAX=100
-      
-      # Features
-      - WEBSOCKET_ENABLED=false
-      - ANALYTICS_ENABLED=true
-    
+      NODE_ENV: production
+      PORT: 5000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_ENABLED: "true"
+      CLUSTER_ENABLED: "true"
+      TRUST_PROXY: "true"
     depends_on:
-      - redis
-    
+      redis:
+        condition: service_healthy
     volumes:
-      - ./cache-data:/app/cache-data
-      - ./certs:/app/certs
-      - ./analytics.json:/app/analytics.json
-    
+      - cache-data:/app/cache-data
+      - certs:/app/certs
     networks:
       - continuum-network
-    
     restart: unless-stopped
-    
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
@@ -79,11 +29,8 @@ services:
       retries: 3
       start_period: 40s
 
-  # Redis for distributed state and caching
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     command: >
       redis-server
       --maxmemory 2gb
@@ -101,33 +48,47 @@ services:
       timeout: 3s
       retries: 3
 
-  # Prometheus (Optional - for production monitoring)
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      continuum:
+        condition: service_healthy
+    networks:
+      - continuum-network
+    restart: unless-stopped
+    profiles:
+      - proxy
+
   prometheus:
     image: prom/prometheus:latest
     ports:
       - "9091:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
     networks:
       - continuum-network
     restart: unless-stopped
     profiles:
       - monitoring
 
-  # Grafana (Optional - for visualization)
   grafana:
     image: grafana/grafana:latest
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana-data:/var/lib/grafana
     networks:
@@ -138,6 +99,10 @@ services:
 
 volumes:
   redis-data:
+  cache-data:
+  certs:
+  caddy-data:
+  caddy-config:
   prometheus-data:
   grafana-data:
 
