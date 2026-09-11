@@ -1,12 +1,12 @@
 {
-  "cdn.example.com": {
-    "hostname": "cdn.example.com",
-    "origin": "https://www.wikipedia.org",
+  "test.com": {
+    "hostname": "test.com",
+    "origin": "https://google.com",
     "plan": "free",
     "active": true,
     "wafRules": [],
     "edgeRules": [],
     "blockedIPs": [],
-    "createdAt": "2026-02-07T16:44:41.799Z"
+    "createdAt": "2026-09-11T14:55:22.211Z"
   }
 }

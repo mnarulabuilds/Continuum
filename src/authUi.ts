@@ -157,7 +157,8 @@ export function renderLoginPage() {
                     document.getElementById('step2').style.display = 'block';
                     document.getElementById('displayEmail').innerText = email;
                 } else {
-                    showError('Failed to send code via Email');
+                    const data = await res.json().catch(() => null);
+                    showError(data?.error ?? 'Failed to send login code');
                 }
             } catch (err) {
                 showError('Network error');

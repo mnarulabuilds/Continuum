@@ -1,20 +1,23 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 RUN apk add --no-cache curl
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --production
+RUN npm ci
 
 COPY . .
 
-# Create cache directory
-RUN mkdir -p cache-data
+RUN npm run build \
+    && mkdir -p /app/cache-data /app/certs \
+    && chown -R node:node /app
 
 EXPOSE 5000
 
 ENV NODE_ENV=production
 ENV PORT=5000
 
-CMD ["node", "src/server.js"]
+USER node
+
+CMD ["node", "dist/server.js"]
