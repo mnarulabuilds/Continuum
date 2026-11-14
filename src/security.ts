@@ -56,6 +56,24 @@ export function checkIPWhitelist(req: IncomingMessage): boolean {
     return whitelist.some((entry) => ipMatchesCidr(ip, entry));
 }
 
+export function isSameOriginMutation(req: IncomingMessage): boolean {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return true;
+    const source = req.headers.origin ?? req.headers.referer;
+    if (!source) return true;
+    const forwardedProto = config.trustProxy && typeof req.headers["x-forwarded-proto"] === "string"
+        ? req.headers["x-forwarded-proto"].split(",", 1)[0]?.trim().toLowerCase()
+        : undefined;
+    const protocol = forwardedProto === "http" || forwardedProto === "https"
+        ? forwardedProto
+        : "encrypted" in req.socket && req.socket.encrypted ? "https" : "http";
+    try {
+        const requestOrigin = new URL(`${protocol}://${req.headers.host}`).origin;
+        return new URL(source).origin === requestOrigin;
+    } catch {
+        return false;
+    }
+}
+
 function normalizeIp(ip: string): string {
     return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
 }

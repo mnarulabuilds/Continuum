@@ -1,13 +1,135 @@
 {
-  "totalRequests": 0,
-  "hits": 0,
-  "misses": 0,
-  "errors": 0,
-  "blocked": 0,
-  "bandwidth": 0,
-  "lastUpdate": 1789138709996,
-  "history": [],
-  "domains": {},
-  "regions": {},
-  "urlStats": {}
+  "totalRequests": 9,
+  "hits": 1,
+  "misses": 5,
+  "errors": 1,
+  "blocked": 2,
+  "bandwidth": 1099,
+  "lastUpdate": 1794652151016,
+  "history": [
+    {
+      "timestamp": 1794652140000,
+      "hits": 1,
+      "misses": 5,
+      "errors": 1,
+      "blocked": 2,
+      "bandwidth": 1099
+    }
+  ],
+  "domains": {
+    "example.com": {
+      "totalRequests": 1,
+      "hits": 0,
+      "misses": 1,
+      "errors": 0,
+      "blocked": 0,
+      "bandwidth": 1024
+    },
+    "unknown.com": {
+      "totalRequests": 1,
+      "hits": 0,
+      "misses": 0,
+      "errors": 1,
+      "blocked": 0,
+      "bandwidth": 0
+    },
+    "proxy-1794652150984.example.com": {
+      "totalRequests": 5,
+      "hits": 1,
+      "misses": 2,
+      "errors": 0,
+      "blocked": 2,
+      "bandwidth": 45
+    },
+    "uncached-1794652150984.example.com": {
+      "totalRequests": 2,
+      "hits": 0,
+      "misses": 2,
+      "errors": 0,
+      "blocked": 0,
+      "bandwidth": 30
+    }
+  },
+  "regions": {
+    "US": 9
+  },
+  "urlStats": {
+    "/index.html": {
+      "total": 1,
+      "hits": 0,
+      "misses": 1,
+      "errors": 0,
+      "blocked": 0,
+      "bandwidth": 1024,
+      "regions": {
+        "US": 1
+      }
+    },
+    "/missing": {
+      "total": 1,
+      "hits": 0,
+      "misses": 0,
+      "errors": 1,
+      "blocked": 0,
+      "bandwidth": 0,
+      "regions": {
+        "US": 1
+      }
+    },
+    "/hello": {
+      "total": 1,
+      "hits": 0,
+      "misses": 1,
+      "errors": 0,
+      "blocked": 0,
+      "bandwidth": 15,
+      "regions": {
+        "US": 1
+      }
+    },
+    "/product?id=1'%20OR%201%3D1--": {
+      "total": 1,
+      "hits": 0,
+      "misses": 0,
+      "errors": 0,
+      "blocked": 1,
+      "bandwidth": 0,
+      "regions": {
+        "US": 1
+      }
+    },
+    "/search?q=%3Cscript%3Ealert(1)%3C/script%3E": {
+      "total": 1,
+      "hits": 0,
+      "misses": 0,
+      "errors": 0,
+      "blocked": 1,
+      "bandwidth": 0,
+      "regions": {
+        "US": 1
+      }
+    },
+    "/cached": {
+      "total": 2,
+      "hits": 1,
+      "misses": 1,
+      "errors": 0,
+      "blocked": 0,
+      "bandwidth": 30,
+      "regions": {
+        "US": 2
+      }
+    },
+    "/never-cache": {
+      "total": 2,
+      "hits": 0,
+      "misses": 2,
+      "errors": 0,
+      "blocked": 0,
+      "bandwidth": 30,
+      "regions": {
+        "US": 2
+      }
+    }
+  }
 }

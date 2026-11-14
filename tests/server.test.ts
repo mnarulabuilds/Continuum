@@ -23,6 +23,10 @@ describe("server routes", () => {
         const response = await fetch(`${baseUrl}/healthz`);
         assert.equal(response.status, 200);
         assert.equal(await response.text(), "OK");
+        const requestId = response.headers.get("x-request-id") ?? "";
+        assert.match(requestId, /^[0-9a-f-]{36}$/);
+        const secondResponse = await fetch(`${baseUrl}/healthz`);
+        assert.notEqual(secondResponse.headers.get("x-request-id"), requestId);
     });
 
     it("serves the landing page", async () => {

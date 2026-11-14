@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 process.env.SESSION_SECRET = "test-session-secret-with-32-characters-minimum";
 process.env.ADMIN_WHITELIST_IPS = "203.0.113.0/24";
 
-const { checkIPWhitelist, generateRequestSignature, handleCORS, verifyRequestSignature } = await import("../src/security.js");
+const { checkIPWhitelist, generateRequestSignature, handleCORS, isSameOriginMutation, verifyRequestSignature } = await import("../src/security.js");
 
 function mockRequest(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
     return {
@@ -63,5 +63,24 @@ describe("security", () => {
     it("matches IPv4 CIDR entries in the admin whitelist", () => {
         assert.equal(checkIPWhitelist(mockRequest()), true);
         assert.equal(checkIPWhitelist(mockRequest({ socket: { remoteAddress: "198.51.100.1" } } as IncomingMessage)), false);
+    });
+
+    it("rejects cross-origin mutations while allowing same-origin and non-browser API requests", () => {
+        assert.equal(isSameOriginMutation(mockRequest({
+            method: "POST",
+            headers: { host: "admin.example.com", origin: "http://admin.example.com" },
+        })), true);
+        assert.equal(isSameOriginMutation(mockRequest({
+            method: "POST",
+            headers: { host: "ADMIN.example.com:80", origin: "http://admin.example.com" },
+        })), true);
+        assert.equal(isSameOriginMutation(mockRequest({
+            method: "POST",
+            headers: { host: "admin.example.com", origin: "https://attacker.example" },
+        })), false);
+        assert.equal(isSameOriginMutation(mockRequest({
+            method: "POST",
+            headers: { host: "admin.example.com" },
+        })), true);
     });
 });

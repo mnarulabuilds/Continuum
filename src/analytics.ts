@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-const ANALYTICS_FILE = "./analytics.json";
+const ANALYTICS_FILE = process.env.ANALYTICS_FILE ?? "./analytics.json";
 const HISTORY_LIMIT = 60;
 
 export type RequestType = "HIT" | "MISS" | "ERROR" | "BLOCKED";

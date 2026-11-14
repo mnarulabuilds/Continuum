@@ -1,12 +1,16 @@
 {
-  "test.com": {
-    "hostname": "test.com",
-    "origin": "https://google.com",
+  "example.com": {
+    "hostname": "example.com",
+    "origin": "https://www.wikipedia.org",
+    "cachePolicy": {
+      "defaultTtl": 2400,
+      "maxTtl": 86400
+    },
     "plan": "free",
     "active": true,
     "wafRules": [],
     "edgeRules": [],
     "blockedIPs": [],
-    "createdAt": "2026-09-11T14:55:22.211Z"
+    "createdAt": "2026-11-14T10:39:32.741Z"
   }
 }

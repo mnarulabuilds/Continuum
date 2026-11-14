@@ -7,6 +7,9 @@ global:
     cluster: 'continuum-cdn'
     environment: 'production'
 
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 # Alerting configuration (optional)
 alerting:
   alertmanagers:

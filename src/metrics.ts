@@ -1,6 +1,8 @@
 import prom from "prom-client";
 
 export const register = new prom.Registry();
+export const aggregatorRegistry = new prom.AggregatorRegistry();
+prom.AggregatorRegistry.setRegistries(register);
 prom.collectDefaultMetrics({ register });
 
 export const httpRequestDuration = new prom.Histogram({
@@ -42,7 +44,7 @@ export const wafBlockedRequests = new prom.Counter({
 export const rateLimitExceeded = new prom.Counter({
     name: "continuum_rate_limit_exceeded_total",
     help: "Total number of rate limit violations",
-    labelNames: ["ip"],
+    labelNames: [],
 });
 
 export const originResponseTime = new prom.Histogram({

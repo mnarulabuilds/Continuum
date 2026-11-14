@@ -14,6 +14,7 @@ import { logBandwidth, logRequest } from "./analytics.js";
 import { checkWAF } from "./waf.js";
 import { executeEdgeRule } from "./edgeEngine.js";
 import { createRedisClient, type RedisClient } from "./redisClient.js";
+import { originResponseTime, rateLimitExceeded, wafBlockedRequests } from "./metrics.js";
 
 type CacheMetadata = { headers: Record<string, string | string[]>; statusCode: number; expiresAt: number };
 const brotliCompress = promisify(zlib.brotliCompress);
@@ -35,8 +36,9 @@ if (config.redis.enabled) {
     redis.connect().catch((error: Error) => logger.warn("Cache store unavailable; using disk cache", { error: error.message }));
 }
 
-function cacheKey(hostname: string, requestTarget: string): string {
-    return crypto.createHash("sha256").update(`${hostname}\n${requestTarget}`).digest("hex");
+function cacheKey(hostname: string, requestTarget: string, policy = domainManager.getConfig(hostname)?.cachePolicy): string {
+    const policyKey = policy ? `${policy.defaultTtl}:${policy.maxTtl}` : `${config.defaultTTL}:${config.defaultTTL}`;
+    return crypto.createHash("sha256").update(`${hostname}\n${requestTarget}\n${policyKey}`).digest("hex");
 }
 function cachePaths(key: string): { body: string; meta: string } {
     return { body: path.join(cacheDir, key), meta: path.join(cacheDir, `${key}.json`) };
@@ -52,11 +54,14 @@ function cacheableResponse(req: IncomingMessage, statusCode: number, headers: Re
     const cacheControl = headers["cache-control"]?.toString() ?? "";
     return req.method === "GET" && statusCode === 200 && ttl > 0 && !headers["set-cookie"] && !/private|no-store/i.test(cacheControl);
 }
-function cacheTtl(headers: Record<string, string | string[]>): number {
+function cacheTtl(headers: Record<string, string | string[]>, hostname: string): number {
     const cacheControl = headers["cache-control"]?.toString() ?? "";
     if (/no-store|private/i.test(cacheControl)) return 0;
     const match = /(?:s-maxage|max-age)=(\d+)/i.exec(cacheControl);
-    return match ? Math.min(Number(match[1]), config.defaultTTL) : config.defaultTTL;
+    const policy = domainManager.getConfig(hostname)?.cachePolicy;
+    const defaultTtl = policy?.defaultTtl ?? config.defaultTTL;
+    const maxTtl = policy?.maxTtl ?? config.defaultTTL;
+    return match ? Math.min(Number(match[1]), maxTtl) : defaultTtl;
 }
 function cachedHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string | string[]> {
     const result = removeHopByHopHeaders(headers);
@@ -135,11 +140,13 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
     const domain = domainManager.getConfig(hostname);
     const wafResult = checkWAF(req, domain ?? {});
     if (wafResult.blocked) {
+        wafBlockedRequests.inc({ reason: wafMetricReason(wafResult.reason), domain: domain ? hostname : "unconfigured" });
         logRequest("BLOCKED", hostname, requestTarget, clientIp(req));
         res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
         return void res.end("Forbidden");
     }
     if (!await checkRateLimit(req)) {
+        rateLimitExceeded.inc();
         res.writeHead(429, { "Content-Type": "text/plain; charset=utf-8", "Retry-After": String(Math.ceil(config.rateLimit.windowMs / 1_000)), "Cache-Control": "no-store" });
         return void res.end("Too Many Requests");
     }
@@ -153,7 +160,8 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
         for (const rule of domain?.edgeRules ?? []) if ((await executeEdgeRule(rule, req, res, "request"))?.stop) return;
     }
 
-    const key = cacheKey(hostname, requestTarget);
+    const cachePolicy = domain?.cachePolicy;
+    const key = cacheKey(hostname, requestTarget, cachePolicy);
     if (cacheableRequest(req)) {
         const cached = await readCache(key);
         if (cached) {
@@ -178,6 +186,13 @@ async function requestOrigin(req: IncomingMessage, res: ServerResponse, origin: 
 
     await new Promise<void>((resolve) => {
         let completed = false;
+        let originObserved = false;
+        const originStartedAt = performance.now();
+        const observeOrigin = (statusCode: number) => {
+            if (originObserved) return;
+            originObserved = true;
+            originResponseTime.observe({ domain: hostname, status_code: String(statusCode) }, (performance.now() - originStartedAt) / 1_000);
+        };
         const finish = () => { if (!completed) { completed = true; resolve(); } };
         const proxyRequest = transport.request({ hostname: originUrl.hostname, port: originUrl.port || undefined, path: req.url, method: req.method, headers, timeout: config.originTimeoutMs }, (originResponse) => {
             const statusCode = originResponse.statusCode ?? 502;
@@ -186,6 +201,7 @@ async function requestOrigin(req: IncomingMessage, res: ServerResponse, origin: 
             if (Number.isFinite(declaredLength) && declaredLength > config.maxOriginResponseBytes) {
                 originResponse.destroy();
                 sendGatewayError(res, 502, "Origin response is too large");
+                observeOrigin(502);
                 return finish();
             }
             const chunks: Buffer[] = [];
@@ -200,12 +216,14 @@ async function requestOrigin(req: IncomingMessage, res: ServerResponse, origin: 
             });
             originResponse.on("error", (error) => {
                 logger.warn("Origin response failed", { hostname, error: error.message });
+                observeOrigin(statusCode);
                 if (!res.headersSent) sendGatewayError(res, 502, "Bad Gateway");
                 finish();
             });
             originResponse.on("end", async () => {
+                observeOrigin(statusCode);
                 const body = Buffer.concat(chunks);
-                const ttl = cacheTtl(responseHeaders);
+                const ttl = cacheTtl(responseHeaders, hostname);
                 if (cacheableResponse(req, statusCode, responseHeaders, ttl)) {
                     await writeCache(key, body, { headers: responseHeaders, statusCode, expiresAt: Date.now() + ttl * 1_000 });
                 }
@@ -216,12 +234,24 @@ async function requestOrigin(req: IncomingMessage, res: ServerResponse, origin: 
         proxyRequest.on("timeout", () => proxyRequest.destroy(new Error("Origin timeout")));
         proxyRequest.on("error", (error) => {
             logger.warn("Origin request failed", { hostname, origin, error: error.message });
+            observeOrigin(502);
             if (!res.headersSent) sendGatewayError(res, 502, "Bad Gateway");
             finish();
         });
         req.on("aborted", () => proxyRequest.destroy());
         req.pipe(proxyRequest);
     });
+}
+
+function wafMetricReason(reason: string | undefined): string {
+    if (reason === "SQL injection attempt") return "sql_injection";
+    if (reason === "XSS attempt") return "xss";
+    if (reason === "Path traversal") return "path_traversal";
+    if (reason === "Repository metadata access") return "repository_metadata";
+    if (reason === "Threat intelligence block") return "threat_intelligence";
+    if (reason === "IP blocked for this domain") return "domain_ip_block";
+    if (reason === "Request target too large") return "request_target_too_large";
+    return "custom_rule";
 }
 
 function sendGatewayError(res: ServerResponse, statusCode: number, message: string): void {

@@ -7,11 +7,13 @@ import { after, before, describe, it } from "node:test";
 
 const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "continuum-cache-"));
 process.env.CACHE_DIR = cacheDir;
+process.env.ANALYTICS_FILE = path.join(cacheDir, "analytics.json");
 process.env.REDIS_ENABLED = "false";
 process.env.RATE_LIMIT_MAX = "1000";
 
 const { handleRequest } = await import("../src/proxy.js");
 const { domainManager } = await import("../src/domainManager.js");
+const { register: metricsRegister } = await import("../src/metrics.js");
 
 type ProxyResponse = { status: number; body: string; cache: string | null };
 
@@ -45,6 +47,8 @@ describe("proxy", () => {
     let proxyServer: http.Server;
     let proxyPort = 0;
     const hostname = `proxy-${Date.now()}.example.com`;
+    const uncachedHostname = `uncached-${Date.now()}.example.com`;
+    let originUrl: string;
 
     before(async () => {
         originServer = http.createServer((_req, res) => {
@@ -54,8 +58,10 @@ describe("proxy", () => {
         await new Promise<void>((resolve) => originServer.listen(0, "127.0.0.1", resolve));
         const originAddress = originServer.address();
         if (!originAddress || typeof originAddress === "string") throw new Error("origin bind failed");
+        originUrl = `http://127.0.0.1:${originAddress.port}`;
 
-        await domainManager.addDomain(hostname, `http://127.0.0.1:${originAddress.port}`);
+        await domainManager.addDomain(hostname, originUrl);
+        await domainManager.addDomain(uncachedHostname, originUrl, { cachePolicy: { defaultTtl: 0, maxTtl: 0 } });
 
         proxyServer = http.createServer((req, res) => void handleRequest(req, res));
         await new Promise<void>((resolve) => proxyServer.listen(0, "127.0.0.1", resolve));
@@ -66,10 +72,12 @@ describe("proxy", () => {
 
     after(async () => {
         await domainManager.removeDomain(hostname);
+        await domainManager.removeDomain(uncachedHostname);
         await new Promise<void>((resolve, reject) => proxyServer.close((error) => error ? reject(error) : resolve()));
         await new Promise<void>((resolve, reject) => originServer.close((error) => error ? reject(error) : resolve()));
         fs.rmSync(cacheDir, { recursive: true, force: true });
         delete process.env.CACHE_DIR;
+        delete process.env.ANALYTICS_FILE;
         delete process.env.REDIS_ENABLED;
         delete process.env.RATE_LIMIT_MAX;
     });
@@ -103,5 +111,19 @@ describe("proxy", () => {
         assert.equal(first.cache, "MISS");
         assert.equal(second.cache, "HIT");
         assert.equal(second.body, "origin-response");
+    });
+
+    it("honors a per-domain policy that disables caching", async () => {
+        const first = await request(proxyPort, "/never-cache", uncachedHostname);
+        const second = await request(proxyPort, "/never-cache", uncachedHostname);
+        assert.equal(first.cache, "MISS");
+        assert.equal(second.cache, "MISS");
+    });
+
+    it("records origin latency and WAF blocks with bounded metric labels", async () => {
+        await request(proxyPort, "/metric-check", hostname);
+        const metrics = await metricsRegister.metrics();
+        assert.match(metrics, /continuum_origin_response_time_seconds_count\{domain="/);
+        assert.match(metrics, /continuum_waf_blocked_requests_total\{reason="sql_injection"/);
     });
 });

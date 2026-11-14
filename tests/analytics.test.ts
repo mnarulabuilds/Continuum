@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { getStats, logBandwidth, logRequest, resetStatsForTests } from "../src/analytics.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { after, describe, it } from "node:test";
+
+const analyticsDir = fs.mkdtempSync(path.join(os.tmpdir(), "continuum-analytics-"));
+process.env.ANALYTICS_FILE = path.join(analyticsDir, "analytics.json");
+const { getStats, logBandwidth, logRequest, resetStatsForTests } = await import("../src/analytics.js");
+
+after(() => {
+    fs.rmSync(analyticsDir, { recursive: true, force: true });
+    delete process.env.ANALYTICS_FILE;
+});
 
 describe("analytics", () => {
     it("tracks request and bandwidth counters", () => {

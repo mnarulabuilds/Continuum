@@ -7,9 +7,11 @@ import { logger } from "./logger.js";
 import { createRedisClient, type RedisClient } from "./redisClient.js";
 
 export type Origin = string | string[];
+export type CachePolicy = { defaultTtl: number; maxTtl: number };
 export type DomainConfig = {
     hostname: string;
     origin: Origin;
+    cachePolicy: CachePolicy;
     plan: "free" | "pro" | "enterprise";
     active: boolean;
     wafRules: Array<{ name?: string; pattern: string; active?: boolean }>;
@@ -68,16 +70,33 @@ function validateOrigin(value: unknown): string {
     return origin.origin;
 }
 
+function normalizeCachePolicy(value: unknown): CachePolicy {
+    if (value === undefined) return { defaultTtl: config.defaultTTL, maxTtl: config.defaultTTL };
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("cachePolicy must be an object");
+    const raw = value as { defaultTtl?: unknown; maxTtl?: unknown };
+    const defaultTtl = raw.defaultTtl ?? config.defaultTTL;
+    const maxTtl = raw.maxTtl ?? config.defaultTTL;
+    if (typeof defaultTtl !== "number" || !Number.isInteger(defaultTtl) || defaultTtl < 0 || defaultTtl > 31_536_000) {
+        throw new Error("cachePolicy.defaultTtl must be an integer between 0 and 31536000");
+    }
+    if (typeof maxTtl !== "number" || !Number.isInteger(maxTtl) || maxTtl < 0 || maxTtl > 31_536_000) {
+        throw new Error("cachePolicy.maxTtl must be an integer between 0 and 31536000");
+    }
+    if (defaultTtl > maxTtl) throw new Error("cachePolicy.defaultTtl cannot exceed cachePolicy.maxTtl");
+    return { defaultTtl, maxTtl };
+}
+
 function normalizeDomainConfig(hostname: string, value: unknown): DomainConfig {
     if (typeof value === "string") {
-        return { hostname: normalizeHostname(hostname), origin: validateOrigin(value), plan: "free", active: true, wafRules: [], edgeRules: [], blockedIPs: [], health: undefined, cors: undefined, createdAt: new Date(0).toISOString() };
+        return { hostname: normalizeHostname(hostname), origin: validateOrigin(value), cachePolicy: normalizeCachePolicy(undefined), plan: "free", active: true, wafRules: [], edgeRules: [], blockedIPs: [], health: undefined, cors: undefined, createdAt: new Date(0).toISOString() };
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid domain config");
     const raw = value as Partial<DomainConfig>;
     const origins = Array.isArray(raw.origin) ? raw.origin.map(validateOrigin) : validateOrigin(raw.origin);
+    const cachePolicy = normalizeCachePolicy(raw.cachePolicy);
     const plan = raw.plan === "pro" || raw.plan === "enterprise" ? raw.plan : "free";
     return {
-        hostname: normalizeHostname(hostname), origin: origins, plan, active: raw.active !== false,
+        hostname: normalizeHostname(hostname), origin: origins, cachePolicy, plan, active: raw.active !== false,
         wafRules: Array.isArray(raw.wafRules) ? raw.wafRules.filter(isWafRule) : [],
         edgeRules: Array.isArray(raw.edgeRules) ? raw.edgeRules.filter(isEdgeRule) : [],
         blockedIPs: Array.isArray(raw.blockedIPs) ? raw.blockedIPs.filter((ip): ip is string => typeof ip === "string") : [],
@@ -96,7 +115,12 @@ function isEdgeRule(value: unknown): value is { id?: string; script: string } {
 
 function persistDomains(): void {
     const temporaryPath = `${DOMAINS_FILE}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(temporaryPath, JSON.stringify(domains, null, 2), { mode: 0o600 });
+    const persistedDomains = Object.fromEntries(Object.entries(domains).map(([hostname, domain]) => {
+        const { cachePolicy, ...legacyFields } = domain;
+        const isDefaultPolicy = cachePolicy.defaultTtl === config.defaultTTL && cachePolicy.maxTtl === config.defaultTTL;
+        return [hostname, isDefaultPolicy ? legacyFields : domain];
+    }));
+    fs.writeFileSync(temporaryPath, JSON.stringify(persistedDomains, null, 2), { mode: 0o600 });
     fs.renameSync(temporaryPath, DOMAINS_FILE);
 }
 
@@ -128,9 +152,22 @@ export const domainManager = {
         const domain = domains[hostname.toLowerCase()];
         if (domain) domain.health = status;
     },
-    async addDomain(hostname: string, origin: unknown, options: Partial<DomainConfig> = {}): Promise<DomainConfig> {
+    async addDomain(hostname: string, origin: unknown, options: Omit<Partial<DomainConfig>, "cachePolicy"> & { cachePolicy?: unknown } = {}): Promise<DomainConfig> {
         const normalizedHostname = normalizeHostname(hostname);
         const next = normalizeDomainConfig(normalizedHostname, { ...options, origin, hostname: normalizedHostname, createdAt: new Date().toISOString() });
+        domains[normalizedHostname] = next;
+        persistDomains();
+        if (redis && redisConnected) {
+            await redis.hset(REDIS_KEY, normalizedHostname, JSON.stringify(next));
+            await redis.publish("Continuum:config_update", JSON.stringify({ hostname: normalizedHostname }));
+        }
+        return next;
+    },
+    async updateCachePolicy(hostname: string, policy: unknown): Promise<DomainConfig | null> {
+        const normalizedHostname = normalizeHostname(hostname);
+        const existing = domains[normalizedHostname];
+        if (!existing) return null;
+        const next = normalizeDomainConfig(normalizedHostname, { ...existing, cachePolicy: policy });
         domains[normalizedHostname] = next;
         persistDomains();
         if (redis && redisConnected) {

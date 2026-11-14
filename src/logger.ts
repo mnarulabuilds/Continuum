@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { config } from "./config.js";
 
 type LogLevel = "debug" | "info" | "warn" | "error" | "http";
@@ -14,13 +15,19 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 const configuredLevel = config.logging.level as LogLevel;
 const currentLevel = LOG_LEVELS[configuredLevel] ?? LOG_LEVELS.info;
 const useJSON = config.logging.format === "json";
+const logContext = new AsyncLocalStorage<LogMetadata>();
+
+export function withLogContext<T>(metadata: LogMetadata, callback: () => T): T {
+    return logContext.run(metadata, callback);
+}
 
 function formatMessage(level: LogLevel, message: string, metadata: LogMetadata = {}): string {
     const timestamp = new Date().toISOString();
+    const contextualMetadata = { ...logContext.getStore(), ...metadata };
     if (useJSON) {
-        return JSON.stringify({ timestamp, level, message, ...metadata, pid: process.pid });
+        return JSON.stringify({ timestamp, level, message, ...contextualMetadata, pid: process.pid });
     }
-    const metaStr = Object.keys(metadata).length > 0 ? ` ${JSON.stringify(metadata)}` : "";
+    const metaStr = Object.keys(contextualMetadata).length > 0 ? ` ${JSON.stringify(contextualMetadata)}` : "";
     return `[${timestamp}] [${level.toUpperCase()}] [PID:${process.pid}] ${message}${metaStr}`;
 }
 

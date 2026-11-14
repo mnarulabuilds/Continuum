@@ -238,7 +238,7 @@ Savings: 97% reduction
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **Runtime** | Node.js v18+ | JavaScript execution engine |
+| **Runtime** | Node.js v22+ | JavaScript execution engine |
 | **Clustering** | Node.js `cluster` | Multi-core utilization |
 | **Database/Cache** | Redis 7+ | Distributed state and caching |
 | **Image Processing** | Sharp | On-the-fly optimization |
@@ -246,7 +246,7 @@ Savings: 97% reduction
 | **Authentication** | google-auth-library, nodemailer | OAuth and OTP |
 | **Metrics** | prom-client | Prometheus integration |
 | **WebSocket** | ws | Real-time communication |
-| **Testing** | Jest | Unit and integration tests |
+| **Testing** | Node.js test runner | Unit and integration tests |
 | **Deployment** | Docker, Docker Compose | Containerization |
 
 ---
@@ -255,7 +255,7 @@ Savings: 97% reduction
 
 ### Prerequisites
 
-- **Node.js**: v18.0.0 or higher
+- **Node.js**: v22.0.0 or higher
 - **Redis**: v7.0+ (optional for development, required for production)
 - **Docker**: v20.10+ (optional, for containerized deployment)
 
@@ -465,12 +465,6 @@ GET /cdn-dashboard
 ```
 Returns: HTML dashboard with real-time statistics
 
-#### Cache Purge
-```http
-GET /cdn-purge?domain=example.com&path=/static/app.js
-```
-Purge specific path or entire cache
-
 ### Admin API (Requires Authentication)
 
 #### List Domains
@@ -486,6 +480,10 @@ Authorization: Cookie (Continuum_session)
     "hostname": "example.com",
     "origin": "https://origin.example.com",
     "plan": "pro",
+    "cachePolicy": {
+      "defaultTtl": 3600,
+      "maxTtl": 3600
+    },
     "active": true,
     "createdAt": "2026-02-07T10:00:00.000Z"
   }
@@ -501,7 +499,11 @@ Authorization: Cookie (Continuum_session)
 {
   "hostname": "example.com",
   "origin": "https://origin.example.com",
-  "plan": "pro"
+  "plan": "pro",
+  "cachePolicy": {
+    "defaultTtl": 300,
+    "maxTtl": 3600
+  }
 }
 ```
 
@@ -511,6 +513,23 @@ Authorization: Cookie (Continuum_session)
   "success": true
 }
 ```
+
+#### Update Domain Cache Policy
+```http
+PUT /admin/domains
+Content-Type: application/json
+Authorization: Cookie (Continuum_session)
+
+{
+  "hostname": "example.com",
+  "cachePolicy": {
+    "defaultTtl": 300,
+    "maxTtl": 3600
+  }
+}
+```
+
+`defaultTtl` is used when the origin does not provide a cache lifetime. `maxTtl` caps origin `max-age` or `s-maxage`. Both values are seconds, must be integers from 0 to 31536000, and `defaultTtl` cannot exceed `maxTtl`. Set both to `0` to disable caching for a domain.
 
 #### Remove Domain
 ```http
@@ -522,6 +541,20 @@ Authorization: Cookie (Continuum_session)
   "hostname": "example.com"
 }
 ```
+
+#### Purge Cache
+```http
+POST /cdn-purge
+Content-Type: application/json
+Authorization: Cookie (Continuum_session)
+
+{
+  "domain": "example.com",
+  "path": "/static/app.js"
+}
+```
+
+Use `"path": "all"` to flush the entire cache. Cache purges and other admin mutations reject cross-origin browser requests.
 
 #### Verify DNS
 ```http
@@ -590,10 +623,13 @@ Enable Prometheus metrics:
 
 ```env
 PROMETHEUS_ENABLED=true
+PROMETHEUS_HOST=127.0.0.1
 PROMETHEUS_PORT=9090
 ```
 
-Access metrics at: `http://localhost:9090/metrics`
+Access metrics at: `http://localhost:9090/metrics`. In clustered mode, worker metrics are aggregated by the primary process. The production Compose file enables the endpoint on the private Compose network for Prometheus and does not publish port 9090 to the host.
+
+The Prometheus configuration loads `prometheus-alerts.yml` with alerts for elevated 5xx rates and slow origin responses. Configure an Alertmanager under `alerting` to deliver notifications.
 
 ### Available Metrics
 
@@ -624,10 +660,10 @@ Access Grafana at: `http://localhost:3000` (admin/admin)
 npm test
 
 # Run with coverage
-npm test -- --coverage
+node --import=tsx --test-isolation=process --experimental-test-coverage --test tests/**/*.test.ts
 
 # Run specific test file
-npm test -- proxy.test.js
+node --import=tsx --test tests/proxy.test.ts
 ```
 
 ### Manual Testing
